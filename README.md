@@ -67,9 +67,10 @@ Add to `~/.claude/settings.json`:
 ```
 
 With `kyvia ask`, the questions Claude asks with answer options show up as a toast: the project,
-then each question with a row of its options (`· any` marks one that takes several). A single
-question with one answer is answered by a click on an option; otherwise clicks pick options and
-Send answers all questions at once. Clicking the text instead brings the terminal forward and the
+then one question at a time with a row of its options (`· any` marks one that takes several). A
+single question with one answer is answered by a click on an option. Several questions are steps:
+a pick moves on from a single-choice one, Back and Next walk the steps, and Send on the last
+answers them all. Clicking the text instead brings the terminal forward and the
 questions are asked there as usual. So are questions nobody answers within 120 seconds, and ones
 kyvia cannot show (more than 4 questions, or two with the same text) or when kyvia is not running.
 To type your own answer, click the text.
