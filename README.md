@@ -4,8 +4,10 @@ kyvia watches your agents work, so you don't have to.
 
 A small macOS menu-bar app that shows toasts in the top-right corner of the screen when a
 script, a build or a coding agent wants your attention. Toasts are drawn with
-[sileo](https://github.com/hiaaryan/sileo), float above every window and never take focus
-or block clicks. The bell in the menu bar keeps the last 20; click one to show it again.
+[sileo](https://github.com/hiaaryan/sileo) and float above every window without taking focus.
+Click a toast to get back to where it came from: the app that sent it and, in VS Code, the
+window with that folder. Clicks next to a toast pass through. The bell in the menu bar keeps the
+last 20; click one to go back there too.
 
 ## Install
 
@@ -70,7 +72,10 @@ curl -H 'X-Kyvia: 1' -d '{"type":"success","title":"Done","description":"all goo
   http://127.0.0.1:47321/notify
 ```
 
-Every field is optional; strings are cut at 500 characters. The answer is `204` on success,
+Every field is optional; strings are cut at 500 characters. `app` is the bundle id of the app a
+click on the toast brings forward if it is running (`kyvia` sends `$__CFBundleIdentifier`, the app
+it runs in), and `path` is the directory the toast is about (`kyvia` sends `$PWD`): VS Code then
+focuses the window whose folder holds it. The answer is `204` on success,
 `400` for a malformed body and `403` without the `X-Kyvia: 1` header. The header keeps web
 pages out: a browser cannot send a custom header cross-origin without a CORS preflight, and
 kyvia never answers one.

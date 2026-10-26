@@ -1,6 +1,7 @@
-// Kyvia: sileo toasts on macOS — a transparent, click-through panel in the top-right
-// corner renders the bundled page; POST /notify on 127.0.0.1:47321 shows a toast.
-// Body: {"type": "success|error|warning|info|action", "title": "...", "description": "...", "duration": ms}
+// Kyvia: sileo toasts on macOS — a transparent panel in the top-right corner renders the bundled
+// page and lets clicks through except on a toast; POST /notify on 127.0.0.1:47321 shows a toast.
+// Body: {"type": "success|error|warning|info|action", "title": "...", "description": "...", "duration": ms,
+//        "app": "bundle id to bring forward on click", "path": "the directory the toast is about"}
 import Cocoa
 import Network
 import WebKit
@@ -8,7 +9,7 @@ import WebKit
 let port: NWEndpoint.Port = 47321
 let size = NSSize(width: 390, height: 420)
 
-final class App: NSObject, NSApplicationDelegate {
+final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler {
     var panel: NSPanel!
     var web: WKWebView!
     var listener: NWListener!
@@ -29,8 +30,14 @@ final class App: NSObject, NSApplicationDelegate {
         panel.backgroundColor = .clear
         panel.hasShadow = false
         panel.ignoresMouseEvents = true
+        panel.acceptsMouseMovedEvents = true
+        // The panel takes the mouse only while the pointer is over a toast.
+        NSEvent.addGlobalMonitorForEvents(matching: .mouseMoved) { [weak self] _ in self?.trackMouse() }
+        NSEvent.addLocalMonitorForEvents(matching: .mouseMoved) { [weak self] in self?.trackMouse(); return $0 }
 
-        web = WKWebView(frame: NSRect(origin: .zero, size: size))
+        let config = WKWebViewConfiguration()
+        config.userContentController.add(self, name: "focus")
+        web = WKWebView(frame: NSRect(origin: .zero, size: size), configuration: config)
         web.setValue(false, forKey: "drawsBackground")
         panel.contentView = web
         let page = Bundle.main.resourceURL!.appendingPathComponent("index.html")
@@ -44,7 +51,7 @@ final class App: NSObject, NSApplicationDelegate {
         startServer()
     }
 
-    // Newest first; clicking an entry shows its toast again.
+    // Newest first; clicking an entry brings its app forward, or shows the toast again if it has none.
     func rebuildMenu() {
         let menu = NSMenu()
         if history.isEmpty { menu.addItem(withTitle: "No notifications", action: nil, keyEquivalent: "") }
@@ -72,7 +79,52 @@ final class App: NSObject, NSApplicationDelegate {
         statusItem.menu = menu
     }
 
-    @objc func replay(_ item: NSMenuItem) { show(history[item.tag].payload) }
+    @objc func replay(_ item: NSMenuItem) {
+        let payload = history[item.tag].payload
+        if payload["app"] != nil { focus(app: payload["app"] as? String, path: payload["path"] as? String) }
+        else { show(payload) }
+    }
+
+    func trackMouse() {
+        let point = NSEvent.mouseLocation, frame = panel.frame
+        guard frame.contains(point) else { panel.ignoresMouseEvents = true; return }
+        web.callAsyncJavaScript("return !!document.elementFromPoint(x, y)?.closest('[data-sileo-toast]')",
+                                arguments: ["x": point.x - frame.minX, "y": frame.maxY - point.y], in: nil, in: .page) { [weak self] in
+            self?.panel.ignoresMouseEvents = (try? $0.get()) as? Bool != true
+        }
+    }
+
+    // A click on a toast: the page sends back the toast's app and path.
+    func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
+        let target = message.body as? [String: Any]
+        focus(app: target?["app"] as? String, path: target?["path"] as? String)
+    }
+
+    // Bring a running app forward, never launch one. VS Code gets the window whose folder holds the path:
+    // opening a folder it already shows focuses that window instead of opening a new one.
+    func focus(app: String?, path: String?) {
+        guard let app, let url = NSRunningApplication.runningApplications(withBundleIdentifier: app).first?.bundleURL else { return }
+        let config = NSWorkspace.OpenConfiguration()
+        if app == "com.microsoft.VSCode", let path, let folder = vscodeFolder(holding: path) {
+            NSWorkspace.shared.open([folder], withApplicationAt: url, configuration: config)
+        } else {
+            NSWorkspace.shared.openApplication(at: url, configuration: config)
+        }
+    }
+
+    // The deepest folder open in a VS Code window that holds path, from the window list VS Code saves.
+    func vscodeFolder(holding path: String) -> URL? {
+        let file = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support/Code/User/globalStorage/storage.json")
+        guard let data = try? Data(contentsOf: file),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let state = json["windowsState"] as? [String: Any] else { return nil }
+        let windows = [state["lastActiveWindow"] as Any] + (state["openedWindows"] as? [Any] ?? [])
+        return windows.compactMap { ($0 as? [String: Any])?["folder"] as? String }
+            .compactMap(URL.init(string:)).filter { $0.isFileURL }
+            .filter { path == $0.path || path.hasPrefix($0.path + "/") }
+            .max { $0.path.count < $1.path.count }
+    }
 
     @objc func toggleSound() {
         UserDefaults.standard.set(!UserDefaults.standard.bool(forKey: "sound"), forKey: "sound")
@@ -148,6 +200,9 @@ final class App: NSObject, NSApplicationDelegate {
             if let value = json[key] as? String { payload[key] = String(value.prefix(500)) }
         }
         if let duration = json["duration"] as? Double, duration > 0 { payload["duration"] = min(duration, 600000) }
+        if let app = json["app"] as? String, app.count <= 255,
+           app.range(of: "^[A-Za-z0-9.-]+$", options: .regularExpression) != nil { payload["app"] = app }
+        if let path = json["path"] as? String, path.hasPrefix("/"), path.count <= 1024 { payload["path"] = path }
         show(payload)
         if UserDefaults.standard.bool(forKey: "sound") { NSSound(named: "Glass")?.play() }
         history.append((Date(), payload))
