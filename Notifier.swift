@@ -242,7 +242,10 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler {
         // A custom header cannot be sent cross-origin without a CORS preflight, which this
         // server never answers, so web pages in a browser cannot raise toasts.
         guard lines.contains("x-kyvia: 1") else { return .forbidden }
+        // A page that rebinds its own domain to 127.0.0.1 is same-origin and may send the header; its Host gives it away.
+        guard lines.contains("host: 127.0.0.1:47321") || lines.contains("host: localhost:47321") else { return .forbidden }
         let length = lines.lazy.compactMap { $0.hasPrefix("content-length:") ? Int($0.dropFirst(15).trimmingCharacters(in: .whitespaces)) : nil }.first ?? 0
+        guard length >= 0 else { return .bad }
         let body = data[end.upperBound...]
         guard body.count >= length else { return .incomplete }
         let content = Data(body.prefix(length))
@@ -269,11 +272,14 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler {
     }
 
     func ask(_ conn: NWConnection, _ body: Data, app: String?) {
-        guard let json = try? JSONSerialization.jsonObject(with: body) as? [String: Any] else { return reply(conn, "400 Bad Request") }
+        // isValidJSONObject: -1e999 parses as -inf, which writing the answer back would crash on (an uncatchable exception).
+        guard let json = try? JSONSerialization.jsonObject(with: body) as? [String: Any], JSONSerialization.isValidJSONObject(json)
+        else { return reply(conn, "400 Bad Request") }
         guard let (input, question, labels) = askable(json) else { return reply(conn, "204 No Content") }
         askCount += 1
         let id = askCount
-        let timer = Timer.scheduledTimer(withTimeInterval: 120, repeats: false) { [weak self] _ in self?.finish(id, label: nil) }
+        let timer = Timer(timeInterval: 120, repeats: false) { [weak self] _ in self?.finish(id, label: nil) }
+        RunLoop.main.add(timer, forMode: .common) // the deadline keeps running while the menu-bar menu is open
         pending[id] = (conn, input, question, labels, timer)
         var payload: [String: Any] = ["type": "action", "title": "Claude", "description": String(question.prefix(500)),
                                       "duration": 120000.0, "options": labels.map { String($0.prefix(500)) }, "ask": id]
@@ -289,6 +295,8 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler {
     func finish(_ id: Int, label: String?) {
         guard let entry = pending.removeValue(forKey: id) else { return }
         entry.timer.invalidate()
+        // sileo restarts a toast's full duration whenever the pointer leaves it, so the page cannot keep the deadline.
+        web.callAsyncJavaScript("window.dismissAsk(a)", arguments: ["a": id], in: nil, in: .page)
         guard let label else { return reply(entry.conn, "204 No Content") }
         var input = entry.input
         input["answers"] = [entry.question: label]

@@ -19,6 +19,11 @@ for _ in {1..100}; do curl -s -o /dev/null "$URL" && break; sleep 0.1; done
 [[ $(code -d '{"title":"x"}') == 403 ]] || fail "a request without X-Kyvia must get 403"
 [[ $(code -H 'X-Kyvia: 1' -d '{"title":"smoke"}') == 204 ]] || fail "a valid toast must get 204"
 [[ $(code -H 'X-Kyvia: 1' -d 'not json') == 400 ]] || fail "a bad body must get 400"
+[[ $(code -H 'X-Kyvia: 1' -H 'Host: rebound.example:47321' -d '{"title":"x"}') == 403 ]] ||
+    fail "a foreign Host (DNS rebinding) must get 403"
+printf 'POST /notify HTTP/1.1\r\nHost: 127.0.0.1:47321\r\nX-Kyvia: 1\r\nContent-Length: -1\r\n\r\n' |
+    nc -w 1 127.0.0.1 47321 >/dev/null || true
+kill -0 $pid 2>/dev/null || fail "a negative Content-Length must not crash the app"
 bin/kyvia -t success 'quotes " and \ backslash' $'two\nlines' || fail "the CLI must escape any text"
 rc=0; bin/kyvia 2>/dev/null || rc=$?
 [[ $rc == 2 ]] || fail "the CLI without a title must exit 2, got $rc"
@@ -37,6 +42,8 @@ q='{"question":"Pick?","header":"P","options":[{"label":"A","description":""},{"
 out=$(bin/kyvia ask <<<"{\"tool_name\":\"AskUserQuestion\",\"tool_input\":{\"questions\":[$q,\"multiSelect\":true}]}}") ||
     fail "kyvia ask must exit 0 on an out-of-scope question"
 [[ -z $out ]] || fail "kyvia ask must print nothing on an out-of-scope question"
+[[ $(ask -H 'X-Kyvia: 1' -d "{\"tool_name\":\"AskUserQuestion\",\"tool_input\":{\"x\":-1e999,\"questions\":[$q}]}}") == 400 ]] ||
+    fail "a question kyvia cannot write back as JSON (an infinite number) must get 400"
 in_scope="{\"tool_name\":\"AskUserQuestion\",\"cwd\":\"/tmp/demo\",\"tool_input\":{\"questions\":[$q}]}}"
 [[ $(ask -m 1 -H 'X-Kyvia: 1' -d "$in_scope") == 000 ]] || fail "an in-scope question must wait for the toast"
 echo "smoke OK"

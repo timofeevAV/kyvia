@@ -30,6 +30,9 @@ window.notify = ({ type, title, description, duration, app, path, options, ask }
   });
 };
 
+// The app closes a question it has answered or left to the terminal; an id already gone does nothing.
+window.dismissAsk = (ask) => sileo.dismiss(`kyvia-ask-${ask}`);
+
 // A click on a toast closes it. An option answers the question; anywhere else asks the app to bring the
 // toast's source forward (and leaves a question to the terminal).
 document.addEventListener("click", (e) => {

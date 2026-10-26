@@ -87,7 +87,8 @@ it runs in), and `path` is the directory the toast is about (`kyvia` sends `$PWD
 focuses the window whose folder holds it. The answer is `204` on success,
 `400` for a malformed body and `403` without the `X-Kyvia: 1` header. The header keeps web
 pages out: a browser cannot send a custom header cross-origin without a CORS preflight, and
-kyvia never answers one.
+kyvia never answers one. A request must also name kyvia itself in `Host` (`127.0.0.1:47321` or
+`localhost:47321`), so a page that rebinds its own domain to 127.0.0.1 gets `403` too.
 
 `POST /ask` takes the input of a Claude Code `PreToolUse` hook (`kyvia ask` sends its stdin) and
 keeps the connection open while the question toast is up. The answer is `200` with the hook's
