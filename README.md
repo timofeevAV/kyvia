@@ -16,7 +16,8 @@ curl -fsSL https://raw.githubusercontent.com/timofeevAV/kyvia/main/install.sh | 
 This puts `Kyvia.app` in `~/Applications`, the `kyvia` command in `~/.local/bin`, and a
 LaunchAgent that starts kyvia at login and restarts it if it quits.
 
-Or with Homebrew:
+Or with Homebrew (use one of the two: both run kyvia on port 47321, and a second copy
+quits at start):
 
 ```sh
 brew install timofeevAV/tap/kyvia
