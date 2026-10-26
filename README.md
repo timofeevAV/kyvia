@@ -14,7 +14,10 @@ curl -fsSL https://raw.githubusercontent.com/timofeevAV/kyvia/main/install.sh | 
 ```
 
 This puts `Kyvia.app` in `~/Applications`, the `kyvia` command in `~/.local/bin`, and a
-LaunchAgent that starts kyvia at login and restarts it if it quits.
+LaunchAgent that starts kyvia at login and restarts it if it quits. If `~/.local/bin` is not
+on your PATH, it adds one line marked `# added by kyvia` to `~/.zshrc` or your bash profile
+(fish: `~/.config/fish/conf.d/kyvia.fish`); open a new terminal afterwards. The uninstaller
+removes that line.
 
 Or with Homebrew (use one of the two: both run kyvia on port 47321, and a second copy
 quits at start):

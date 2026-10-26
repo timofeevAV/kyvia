@@ -56,7 +56,28 @@ launchctl bootstrap "$DOMAIN" "$AGENT"
 for _ in {1..100}; do curl -s -o /dev/null http://127.0.0.1:47321/ && break; sleep 0.1; done
 
 echo "kyvia installed: $APP, starts at login"
-case ":$PATH:" in
-    *":$BIN_DIR:"*) echo "try it: kyvia -t success 'Hello' 'kyvia is running'" ;;
-    *) echo "add $BIN_DIR to your PATH to use the kyvia command" ;;
+try="kyvia -t success 'Hello' 'kyvia is running'"
+case ":$PATH:" in *":$BIN_DIR:"*) echo "try it: $try"; exit 0 ;; esac
+
+# A stock macOS PATH lacks ~/.local/bin. uninstall.sh removes the lines marked "added by kyvia".
+# shellcheck disable=SC2016 # $HOME and $PATH expand when the shell reads the line
+line='export PATH="$HOME/.local/bin:$PATH" # added by kyvia'
+case ${SHELL##*/} in
+    zsh) rc=${ZDOTDIR:-$HOME}/.zshrc ;;
+    bash)
+        # bash reads only the first of these, so a new .bash_profile would hide an existing .profile.
+        rc=$HOME/.bash_profile
+        for f in .bash_profile .bash_login .profile; do [[ -e $HOME/$f ]] && { rc=$HOME/$f; break; }; done ;;
+    fish)
+        rc=$HOME/.config/fish/conf.d/kyvia.fish
+        # shellcheck disable=SC2016
+        line='fish_add_path $HOME/.local/bin # added by kyvia' ;;
+    *) echo "add $BIN_DIR to your PATH to use the kyvia command"; exit 0 ;;
 esac
+if ! grep -qs '# added by kyvia$' "$rc"; then
+    mkdir -p "$(dirname "$rc")"
+    # shortcut: an rc without a final newline gets one, which uninstall leaves behind
+    if [[ -s $rc && -n $(tail -c1 "$rc") ]]; then echo >> "$rc"; fi
+    echo "$line" >> "$rc"
+fi
+echo "added $BIN_DIR to PATH in $rc; open a new terminal and try it: $try"
