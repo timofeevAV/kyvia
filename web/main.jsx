@@ -27,7 +27,7 @@ function Ask({ ask, questions }) {
   };
   const ready = picks[step].length > 0;
   // The toast itself is a <button>, so an option is a div acting as one; a picked one takes sileo's success colour,
-  // a button not usable yet sileo's grey.
+  // Back and a button not usable yet sileo's grey, so neither reads as an answer.
   const button = (key, label, state, onClick) => (
     <div key={key} role="button" data-kyvia-option data-sileo-button data-state={state} onClick={onClick}>{label}</div>
   );
@@ -38,7 +38,7 @@ function Ask({ ask, questions }) {
       <div style={{ whiteSpace: "pre-line" }}>{`${counter}${question}${multi ? " · any" : ""}`}</div>
       {row("flex-start", options.map((label, o) => button(o, label, picks[step].includes(o) ? "success" : "action", () => pick(o))))}
       {(last > 0 || multi) && row("space-between", [
-        step > 0 ? button("back", "Back", "action", () => setStep(step - 1)) : <span key="back" />,
+        step > 0 ? button("back", "Back", "loading", () => setStep(step - 1)) : <span key="back" />,
         step < last
           ? button("next", "Next", ready ? "action" : "loading", () => ready && setStep(step + 1))
           : button("send", "Send", ready ? "action" : "loading", () => ready && send(picks)),
