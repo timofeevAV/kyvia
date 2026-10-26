@@ -10,9 +10,10 @@ shift $((OPTIND - 1))
 [[ $# -ge 1 && $# -le 2 ]] || usage
 [[ -z $duration || $duration =~ ^[0-9]+$ ]] || usage
 # JSON comes from JavaScript for Automation, so any text is escaped correctly without jq.
+# app and path let a click on the toast bring this terminal (and, in VS Code, this window) forward.
 osascript -l JavaScript -e 'function run(a) {
-    const p = {type: a[0], title: a[1], description: a[2]}
+    const p = {type: a[0], title: a[1], description: a[2], app: a[4], path: a[5]}
     if (a[3]) p.duration = Number(a[3])
-    return JSON.stringify(p) }' -- "$type" "$1" "${2:-}" "$duration" |
+    return JSON.stringify(p) }' -- "$type" "$1" "${2:-}" "$duration" "${__CFBundleIdentifier:-}" "$PWD" |
     curl -sf -m 2 -o /dev/null -H 'X-Kyvia: 1' --data-binary @- http://127.0.0.1:47321/notify ||
     { echo "kyvia: the app is not running (127.0.0.1:47321)" >&2; exit 1; }
