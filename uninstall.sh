@@ -12,4 +12,14 @@ if [[ $(readlink "$HOME/.local/bin/kv") == "$HOME/Applications/Kyvia.app/Content
     rm -f "$HOME/.local/bin/kv"
 fi
 defaults delete io.github.timofeevav.kyvia 2>/dev/null || true
+# Drop only the PATH lines install.sh added; cat > keeps a symlinked rc a symlink, sed -i would not.
+for rc in "${ZDOTDIR:-$HOME}/.zshrc" "$HOME/.bash_profile" "$HOME/.bash_login" "$HOME/.profile"; do
+    if grep -qs '# added by kyvia$' "$rc"; then
+        kept=$(mktemp)
+        grep -v '# added by kyvia$' "$rc" > "$kept" || true
+        cat "$kept" > "$rc"
+        rm -f "$kept"
+    fi
+done
+rm -f "$HOME/.config/fish/conf.d/kyvia.fish"
 echo "kyvia removed"
