@@ -1,7 +1,7 @@
 #!/bin/bash
-# Show a kyvia toast: kyvia [-t success|error|warning|info|action] [-d ms] TITLE [DESCRIPTION]
+# Show a kyvia toast: kyvia (or kv) [-t success|error|warning|info|action] [-d ms] TITLE [DESCRIPTION]
 set -euo pipefail
-usage() { echo "usage: kyvia [-t success|error|warning|info|action] [-d ms] TITLE [DESCRIPTION]" >&2; exit 2; }
+usage() { echo "usage: ${0##*/} [-t success|error|warning|info|action] [-d ms] TITLE [DESCRIPTION]" >&2; exit 2; }
 type=info duration=
 while getopts t:d:h opt; do
     case $opt in t) type=$OPTARG ;; d) duration=$OPTARG ;; *) usage ;; esac

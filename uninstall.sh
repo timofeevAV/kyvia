@@ -8,5 +8,8 @@ for label in io.github.timofeevav.kyvia local.sileo-notifier; do
 done
 rm -rf "$HOME/Applications/Kyvia.app"
 rm -f "$HOME/.local/bin/kyvia"
+if [[ $(readlink "$HOME/.local/bin/kv") == "$HOME/Applications/Kyvia.app/Contents/Resources/kyvia" ]]; then
+    rm -f "$HOME/.local/bin/kv"
+fi
 defaults delete io.github.timofeevav.kyvia 2>/dev/null || true
 echo "kyvia removed"
