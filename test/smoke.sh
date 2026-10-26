@@ -52,4 +52,28 @@ in_scope="{\"tool_name\":\"AskUserQuestion\",\"cwd\":\"/tmp/demo\",\"tool_input\
 q2='{"question":"More?","header":"M","multiSelect":true,"options":[{"label":"X","description":""},{"label":"Y","description":""}]}'
 [[ $(ask -m 1 -H 'X-Kyvia: 1' -d "{\"tool_name\":\"AskUserQuestion\",\"tool_input\":{\"questions\":[$q},$q2]}}") == 000 ]] ||
     fail "a single-choice and a multi-select question in one call must wait for the toast"
+
+event() { printf '{"session_id":"%s","hook_event_name":"%s","cwd":"/tmp/demo","tool_name":"Bash","tool_input":{"command":"%s"}%s}' "$@"; }
+[[ $(ask -H 'X-Kyvia: 1' -d '{"hook_event_name":"PermissionRequest","tool_name":"Bash","tool_input":{}}') == 204 ]] ||
+    fail "a permission request without a session must get 204 at once"
+[[ $(ask -H 'X-Kyvia: 1' -d "$(event s0 PostToolUse ls)") == 204 ]] || fail "PostToolUse must get 204 at once"
+# hold FILE BODY: a permission request waiting in the background; its status lands in FILE once kyvia answers.
+hold() { curl -s -o /dev/null -w '%{http_code}' -m 5 -H 'X-Kyvia: 1' -d "$2" "$ASK" >"$1" & }
+held() { sleep 0.3; [[ ! -s $1 ]]; }
+hold "$tmp/p1" "$(event s1 PermissionRequest ls)"
+held "$tmp/p1" || fail "a permission request must wait for the toast"
+ask -H 'X-Kyvia: 1' -d "$(event s1 PostToolUse pwd)" >/dev/null
+ask -H 'X-Kyvia: 1' -d "$(event s2 PostToolUse ls)" >/dev/null
+held "$tmp/p1" || fail "PostToolUse of another call must leave the permission toast up"
+big=$(printf '%*s' 200000 '' | tr ' ' x)
+[[ $(ask -H 'X-Kyvia: 1' -d "$(event s1 PostToolUse ls ",\"tool_response\":{\"stdout\":\"$big\"}")") == 204 ]] ||
+    fail "a large PostToolUse body must be read"
+wait $! || true
+[[ $(<"$tmp/p1") == 204 ]] || fail "PostToolUse of the same call (with a large response) must close the permission toast with 204"
+hold "$tmp/p2" "$(event s3 PermissionRequest ls)"
+ask -H 'X-Kyvia: 1' -d "$(event s4 UserPromptSubmit x)" >/dev/null
+held "$tmp/p2" || fail "a prompt in another session must leave the permission toast up"
+ask -H 'X-Kyvia: 1' -d "$(event s3 UserPromptSubmit x)" >/dev/null
+wait $! || true
+[[ $(<"$tmp/p2") == 204 ]] || fail "the next prompt of the session must close the permission toast with 204"
 echo "smoke OK"

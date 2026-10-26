@@ -61,7 +61,13 @@ Add to `~/.claude/settings.json`:
     ],
     "PreToolUse": [
       { "matcher": "AskUserQuestion", "hooks": [{ "type": "command", "command": "kyvia ask", "timeout": 150 }] }
-    ]
+    ],
+    "PermissionRequest": [
+      { "hooks": [{ "type": "command", "command": "kyvia ask", "timeout": 150 }] }
+    ],
+    "PostToolUse": [{ "hooks": [{ "type": "command", "command": "kyvia ask" }] }],
+    "PostToolUseFailure": [{ "hooks": [{ "type": "command", "command": "kyvia ask" }] }],
+    "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "kyvia ask" }] }]
   }
 }
 ```
@@ -74,6 +80,12 @@ answers them all. Clicking the text instead brings the terminal forward and the
 questions are asked there as usual. So are questions nobody answers within 120 seconds, and ones
 kyvia cannot show (more than 4 questions, or two with the same text) or when kyvia is not running.
 To type your own answer, click the text.
+
+When Claude asks for permission to use a tool, the toast shows what it wants to run (the command,
+or the file it wants to touch) with **Allow** and **Deny**. The terminal asks at the same time, and
+whichever you answer first wins: after an answer in the terminal, the `PostToolUse`,
+`PostToolUseFailure` and `UserPromptSubmit` hooks close the toast that is left. Clicking the text
+brings the terminal forward; 120 seconds without an answer close the toast.
 
 ### HTTP
 
@@ -93,11 +105,14 @@ pages out: a browser cannot send a custom header cross-origin without a CORS pre
 kyvia never answers one. A request must also name kyvia itself in `Host` (`127.0.0.1:47321` or
 `localhost:47321`), so a page that rebinds its own domain to 127.0.0.1 gets `403` too.
 
-`POST /ask` takes the input of a Claude Code `PreToolUse` hook (`kyvia ask` sends its stdin) and
-keeps the connection open while the question toast is up. The answer is `200` with the hook's
+`POST /ask` takes the input of a Claude Code hook (`kyvia ask` sends its stdin). For a `PreToolUse`
+of `AskUserQuestion` it keeps the connection open while the question toast is up. The answer is `200` with the hook's
 output (`permissionDecision: allow` and the picked options in `updatedInput.answers`, several of
 one question joined with `, `) when the questions are answered, and `204` when the question goes back to the terminal: a click on the text, 120 seconds
-without an answer, or a body kyvia does not show as a toast. `400` and `403` mean the same as for
+without an answer, or a body kyvia does not show as a toast. A `PermissionRequest` waits the same
+way and gets `200` with `decision: {"behavior": "allow"}` or `"deny"`; a `PostToolUse` or
+`PostToolUseFailure` of the same session, tool and input, or a `UserPromptSubmit` of the same
+session, answers it with `204` and gets `204` itself. `400` and `403` mean the same as for
 `/notify`.
 
 ## Uninstall

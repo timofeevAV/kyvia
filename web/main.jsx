@@ -14,7 +14,8 @@ function Ask({ ask, questions }) {
   const [picks, setPicks] = useState(() => questions.map(() => []));
   const [step, setStep] = useState(0);
   const last = questions.length - 1;
-  const { question, options, multi } = questions[step];
+  // muted: the option drawn in grey, as Deny next to Allow.
+  const { question, options, multi, muted } = questions[step];
   const send = (answer) => {
     sileo.dismiss(`kyvia-ask-${ask}`);
     window.webkit.messageHandlers.answer.postMessage({ ask, picks: answer });
@@ -36,7 +37,7 @@ function Ask({ ask, questions }) {
   return (
     <>
       <div style={{ whiteSpace: "pre-line" }}>{`${counter}${question}${multi ? " · any" : ""}`}</div>
-      {row("flex-start", options.map((label, o) => button(o, label, picks[step].includes(o) ? "success" : "action", () => pick(o))))}
+      {row("flex-start", options.map((label, o) => button(o, label, picks[step].includes(o) ? "success" : o === muted ? "loading" : "action", () => pick(o))))}
       {(last > 0 || multi) && row("space-between", [
         step > 0 ? button("back", "Back", "loading", () => setStep(step - 1)) : <span key="back" />,
         step < last
