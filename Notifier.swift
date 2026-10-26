@@ -11,8 +11,18 @@ import WebKit
 let port: NWEndpoint.Port = 47321
 let size = NSSize(width: 390, height: 420)
 
+// WebKit hit-tests pointer moves (hover, :hover) only in a key window; the panel must never take the keyboard,
+// so it only claims to be key. Keystrokes still go to the app that has them.
+final class Panel: NSPanel {
+    override var isKeyWindow: Bool { true }
+}
+
+// The window server ignores cursor changes from an app in the background unless its connection opts in.
+@_silgen_name("_CGSDefaultConnection") func _CGSDefaultConnection() -> Int32
+@_silgen_name("CGSSetConnectionProperty") func CGSSetConnectionProperty(_ cid: Int32, _ target: Int32, _ key: CFString, _ value: CFTypeRef) -> Int32
+
 final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler {
-    var panel: NSPanel!
+    var panel: Panel!
     var web: WKWebView!
     var listener: NWListener!
     var statusItem: NSStatusItem!
@@ -23,13 +33,14 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler {
     // shortcut: Esc in the terminal kills the hook but the toast stays until its deadline; drop the toast when the peer closes if that annoys.
     var pending: [Int: (conn: NWConnection, input: [String: Any], question: String, labels: [String], timer: Timer)] = [:]
     var askCount = 0
-    var overToast = false
+    var pointerInside = false
     let symbols = ["success": "checkmark.circle", "error": "xmark.circle", "warning": "exclamationmark.triangle",
                    "info": "info.circle", "action": "arrow.right.circle"]
 
     func applicationDidFinishLaunching(_ note: Notification) {
         UserDefaults.standard.register(defaults: ["sound": true])
-        panel = NSPanel(contentRect: NSRect(origin: .zero, size: size),
+        _ = CGSSetConnectionProperty(_CGSDefaultConnection(), _CGSDefaultConnection(), "SetsCursorInBackground" as CFString, kCFBooleanTrue)
+        panel = Panel(contentRect: NSRect(origin: .zero, size: size),
                         styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         panel.level = .statusBar
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
@@ -93,18 +104,37 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler {
         else { show(payload) }
     }
 
-    // The page learns where the pointer is (WebKit sends no hover to a window that is never key) and says
-    // whether it is over a toast; outside the panel it is told once more, so the toast can collapse.
+    // A never-key window gets no pointer moves, so the app hands each one to the page itself (hover, :hover,
+    // the cursor) and once more on the way out; the panel takes the mouse only while the page says the
+    // pointer is over a toast.
     func trackMouse() {
         let point = NSEvent.mouseLocation, frame = panel.frame
         let inside = frame.contains(point)
-        guard inside || overToast else { panel.ignoresMouseEvents = true; return }
-        let at = inside ? ["x": point.x - frame.minX, "y": frame.maxY - point.y] : ["x": -1.0, "y": -1.0]
-        web.callAsyncJavaScript("return window.hover(x, y)", arguments: at, in: nil, in: .page) { [weak self] in
-            let over = (try? $0.get()) as? Bool == true
-            self?.overToast = over
-            self?.panel.ignoresMouseEvents = !over
+        guard inside || pointerInside else { return }
+        pointerInside = inside
+        let at = NSPoint(x: point.x - frame.minX, y: point.y - frame.minY), now = ProcessInfo.processInfo.systemUptime
+        guard inside else {
+            panel.ignoresMouseEvents = true
+            forward("_simulateMouseExit:", NSEvent.enterExitEvent(with: .mouseExited, location: at, modifierFlags: [], timestamp: now,
+                windowNumber: panel.windowNumber, context: nil, eventNumber: 0, trackingNumber: 0, userData: nil))
+            return
         }
+        forward("_simulateMouseMove:", NSEvent.mouseEvent(with: .mouseMoved, location: at, modifierFlags: [], timestamp: now,
+            windowNumber: panel.windowNumber, context: nil, eventNumber: 0, clickCount: 0, pressure: 0))
+        web.callAsyncJavaScript("return window.toastCursor(x, y)", arguments: ["x": at.x, "y": frame.height - at.y], in: nil, in: .page) { [weak self] in
+            guard let self, self.pointerInside else { return } // the pointer left before the page answered
+            let cursor = (try? $0.get()) as? String
+            self.panel.ignoresMouseEvents = cursor == nil
+            // The app under the panel resets the cursor on each move and WebKit sets it only on a change, so set it every time.
+            if let cursor { (cursor == "pointer" ? NSCursor.pointingHand : NSCursor.arrow).set() }
+        }
+    }
+
+    // WKWebView reads pointer moves only from its own tracking area; this WebKit SPI takes one from the app.
+    // A WebKit without it leaves the page without hover, nothing worse.
+    func forward(_ selector: String, _ event: NSEvent?) {
+        let sel = NSSelectorFromString(selector)
+        if let event, web.responds(to: sel) { web.perform(sel, with: event) }
     }
 
     // A click on a toast: an option answers its question; anywhere else the page sends back the toast's app

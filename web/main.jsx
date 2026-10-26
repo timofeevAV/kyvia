@@ -23,6 +23,9 @@ window.notify = ({ type, title, description, duration, app, path, options, ask }
     title,
     description: content.length ? content : undefined,
     duration: duration ?? 6000,
+    // sileo's autopilot collapses a toast 4 s after it appears, even under the pointer; a question stays open
+    // until answered or left (sileo clamps the delay to the duration).
+    autopilot: ask ? { collapse: Infinity } : undefined,
     styles: { title: `kyvia-${n}` },
   });
 };
@@ -45,17 +48,10 @@ document.addEventListener("click", (e) => {
   window.webkit.messageHandlers.focus.postMessage({ app: app ?? "", path: path ?? "", ask: ask ?? 0 });
 });
 
-// The app reports the pointer (the panel never gets hover of its own); replay it as the mouseover/mouseout
-// pair React turns into sileo's onMouseEnter/onMouseLeave, so a toast expands under the pointer.
-let hovered = null;
-window.hover = (x, y) => {
-  const toast = document.elementFromPoint(x, y)?.closest("[data-sileo-toast]") ?? null;
-  if (toast !== hovered) {
-    hovered?.dispatchEvent(new MouseEvent("mouseout", { bubbles: true, relatedTarget: toast ?? document.body }));
-    toast?.dispatchEvent(new MouseEvent("mouseover", { bubbles: true, relatedTarget: hovered ?? document.body }));
-    hovered = toast;
-  }
-  return !!toast;
+// The app asks for the CSS cursor under the pointer, null off a toast; only over a toast does the panel take the mouse.
+window.toastCursor = (x, y) => {
+  const el = document.elementFromPoint(x, y);
+  return el?.closest("[data-sileo-toast]") ? getComputedStyle(el).cursor : null;
 };
 
 createRoot(document.getElementById("root")).render(<Toaster position="top-right" theme="system" />);
