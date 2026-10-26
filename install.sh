@@ -34,6 +34,12 @@ mkdir -p "$HOME/Applications" "$BIN_DIR" "$(dirname "$AGENT")"
 rm -rf "$APP"
 ditto "$src" "$APP"
 ln -sf "$APP/Contents/Resources/kyvia" "$BIN_DIR/kyvia"
+# kv is the short name; a kv that is not ours stays.
+if [[ ! -e $BIN_DIR/kv && ! -L $BIN_DIR/kv || $(readlink "$BIN_DIR/kv") == "$APP/Contents/Resources/kyvia" ]]; then
+    ln -sf "$APP/Contents/Resources/kyvia" "$BIN_DIR/kv"
+else
+    echo "kyvia: $BIN_DIR/kv is something else, kept it; use the kyvia command" >&2
+fi
 cat > "$AGENT" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

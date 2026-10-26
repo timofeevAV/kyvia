@@ -36,7 +36,8 @@ kyvia -t error -d 15000 "Tests failed" "3 of 120 failed"
 
 `-t` is one of `success`, `error`, `warning`, `info` (default) and `action`; `-d` is how long
 the toast stays, in milliseconds (default 6000). A description may span several lines. `kyvia`
-exits with 1 when the app is not running and 2 on wrong arguments.
+exits with 1 when the app is not running and 2 on wrong arguments. `kv` is the same command,
+shorter: `kv "Build finished"`.
 
 The menu-bar bell also has **Sound** (a chime on each new toast) and **Clear**.
 
