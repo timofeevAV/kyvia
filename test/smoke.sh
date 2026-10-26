@@ -35,15 +35,21 @@ ask() { curl -s -o /dev/null -w '%{http_code}' -m 2 -X POST "$@" "$ASK"; }
 q='{"question":"Pick?","header":"P","options":[{"label":"A","description":""},{"label":"B","description":""}]'
 [[ $(ask -d '{}') == 403 ]] || fail "/ask without X-Kyvia must get 403"
 [[ $(ask -H 'X-Kyvia: 1' -d 'not json') == 400 ]] || fail "/ask with a bad body must get 400"
-[[ $(ask -H 'X-Kyvia: 1' -d "{\"tool_name\":\"AskUserQuestion\",\"tool_input\":{\"questions\":[$q,\"multiSelect\":true}]}}") == 204 ]] ||
-    fail "a multiSelect question must get 204 at once"
+qs=; for i in 1 2 3 4 5; do qs+="${qs:+,}${q/Pick?/Pick $i?}}"; done
+five="{\"tool_name\":\"AskUserQuestion\",\"tool_input\":{\"questions\":[$qs]}}"
+[[ $(ask -H 'X-Kyvia: 1' -d "$five") == 204 ]] || fail "more than 4 questions must get 204 at once"
+[[ $(ask -H 'X-Kyvia: 1' -d "{\"tool_name\":\"AskUserQuestion\",\"tool_input\":{\"questions\":[$q},$q}]}}") == 204 ]] ||
+    fail "two questions with one text must get 204 at once"
 [[ $(ask -H 'X-Kyvia: 1' -d "{\"tool_name\":\"Bash\",\"tool_input\":{\"questions\":[$q}]}}") == 204 ]] ||
     fail "another tool must get 204 at once"
-out=$(bin/kyvia ask <<<"{\"tool_name\":\"AskUserQuestion\",\"tool_input\":{\"questions\":[$q,\"multiSelect\":true}]}}") ||
+out=$(bin/kyvia ask <<<"$five") ||
     fail "kyvia ask must exit 0 on an out-of-scope question"
 [[ -z $out ]] || fail "kyvia ask must print nothing on an out-of-scope question"
 [[ $(ask -H 'X-Kyvia: 1' -d "{\"tool_name\":\"AskUserQuestion\",\"tool_input\":{\"x\":-1e999,\"questions\":[$q}]}}") == 400 ]] ||
     fail "a question kyvia cannot write back as JSON (an infinite number) must get 400"
 in_scope="{\"tool_name\":\"AskUserQuestion\",\"cwd\":\"/tmp/demo\",\"tool_input\":{\"questions\":[$q}]}}"
 [[ $(ask -m 1 -H 'X-Kyvia: 1' -d "$in_scope") == 000 ]] || fail "an in-scope question must wait for the toast"
+q2='{"question":"More?","header":"M","multiSelect":true,"options":[{"label":"X","description":""},{"label":"Y","description":""}]}'
+[[ $(ask -m 1 -H 'X-Kyvia: 1' -d "{\"tool_name\":\"AskUserQuestion\",\"tool_input\":{\"questions\":[$q},$q2]}}") == 000 ]] ||
+    fail "a single-choice and a multi-select question in one call must wait for the toast"
 echo "smoke OK"

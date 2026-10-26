@@ -31,7 +31,7 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler {
     let historyLimit = 20
     // Questions waiting for a click, by toast; each connection gets exactly one answer.
     // shortcut: Esc in the terminal kills the hook but the toast stays until its deadline; drop the toast when the peer closes if that annoys.
-    var pending: [Int: (conn: NWConnection, input: [String: Any], question: String, labels: [String], timer: Timer)] = [:]
+    var pending: [Int: (conn: NWConnection, input: [String: Any], questions: [Question], timer: Timer)] = [:]
     var askCount = 0
     var pointerInside = false
     let symbols = ["success": "checkmark.circle", "error": "xmark.circle", "warning": "exclamationmark.triangle",
@@ -137,20 +137,19 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler {
         if let event, web.responds(to: sel) { web.perform(sel, with: event) }
     }
 
-    // A click on a toast: an option answers its question; anywhere else the page sends back the toast's app
+    // A click on a toast: an answer brings the options picked for each question; anywhere else the page sends back the toast's app
     // and path, and a question is left to the terminal.
     func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
         let target = message.body as? [String: Any]
         let id = target?["ask"] as? Int ?? 0
         if message.name == "answer" {
-            // The label comes from the question itself, so the page can only pick an offered option.
-            if let option = target?["option"] as? Int, let labels = pending[id]?.labels, labels.indices.contains(option) {
-                finish(id, label: labels[option])
-            }
+            // Labels come from the questions themselves, so the page can only pick offered options.
+            if let picks = target?["picks"] as? [[Int]], let questions = pending[id]?.questions,
+               let answers = answers(questions, picks) { finish(id, answers: answers) }
             return
         }
         focus(app: target?["app"] as? String, path: target?["path"] as? String)
-        finish(id, label: nil)
+        finish(id, answers: nil)
     }
 
     // Bring a running app forward, never launch one. VS Code gets the window whose folder holds the path:
@@ -260,29 +259,52 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler {
         return value
     }
 
-    // The one shape a toast can answer: a single single-choice question with 2 to 4 labelled options.
-    func askable(_ json: [String: Any]) -> (input: [String: Any], question: String, labels: [String])? {
+    typealias Question = (text: String, labels: [String], multi: Bool)
+
+    // The shape a toast can answer: 1 to 4 questions, each with 2 to 4 labelled options.
+    func askable(_ json: [String: Any]) -> (input: [String: Any], questions: [Question])? {
         guard json["tool_name"] as? String == "AskUserQuestion", let input = json["tool_input"] as? [String: Any],
-              let questions = input["questions"] as? [[String: Any]], questions.count == 1,
-              let question = questions[0]["question"] as? String, !question.isEmpty,
-              questions[0]["multiSelect"] as? Bool != true,
-              let options = questions[0]["options"] as? [[String: Any]], (2...4).contains(options.count) else { return nil }
-        let labels = options.compactMap { $0["label"] as? String }.filter { !$0.isEmpty }
-        return labels.count == options.count ? (input, question, labels) : nil
+              let raw = input["questions"] as? [[String: Any]], (1...4).contains(raw.count) else { return nil }
+        let questions = raw.compactMap { q -> Question? in
+            guard let text = q["question"] as? String, !text.isEmpty,
+                  let options = q["options"] as? [[String: Any]], (2...4).contains(options.count) else { return nil }
+            let labels = options.compactMap { $0["label"] as? String }.filter { !$0.isEmpty }
+            return labels.count == options.count ? (text, labels, q["multiSelect"] as? Bool == true) : nil
+        }
+        // Answers are keyed by question text, so two questions with one text could not both be answered.
+        guard questions.count == raw.count, Set(questions.map(\.text)).count == questions.count else { return nil }
+        return (input, questions)
+    }
+
+    // One answer per question: exactly one pick for a single-choice question, one or more for a multi-select
+    // one, joined in option order with ", " as Claude Code joins them.
+    func answers(_ questions: [Question], _ picks: [[Int]]) -> [String: String]? {
+        guard picks.count == questions.count else { return nil }
+        var result: [String: String] = [:]
+        for (question, pick) in zip(questions, picks) {
+            let chosen = Set(pick)
+            guard !chosen.isEmpty, chosen.count == pick.count, question.multi || chosen.count == 1,
+                  chosen.allSatisfy(question.labels.indices.contains) else { return nil }
+            result[question.text] = chosen.sorted().map { question.labels[$0] }.joined(separator: ", ")
+        }
+        return result
     }
 
     func ask(_ conn: NWConnection, _ body: Data, app: String?) {
         // isValidJSONObject: -1e999 parses as -inf, which writing the answer back would crash on (an uncatchable exception).
         guard let json = try? JSONSerialization.jsonObject(with: body) as? [String: Any], JSONSerialization.isValidJSONObject(json)
         else { return reply(conn, "400 Bad Request") }
-        guard let (input, question, labels) = askable(json) else { return reply(conn, "204 No Content") }
+        guard let (input, questions) = askable(json) else { return reply(conn, "204 No Content") }
         askCount += 1
         let id = askCount
-        let timer = Timer(timeInterval: 120, repeats: false) { [weak self] _ in self?.finish(id, label: nil) }
+        let timer = Timer(timeInterval: 120, repeats: false) { [weak self] _ in self?.finish(id, answers: nil) }
         RunLoop.main.add(timer, forMode: .common) // the deadline keeps running while the menu-bar menu is open
-        pending[id] = (conn, input, question, labels, timer)
-        var payload: [String: Any] = ["type": "action", "title": "Claude", "description": String(question.prefix(500)),
-                                      "duration": 120000.0, "options": labels.map { String($0.prefix(500)) }, "ask": id]
+        pending[id] = (conn, input, questions, timer)
+        let shown = questions.map { ["question": String($0.text.prefix(500)), "options": $0.labels.map { String($0.prefix(500)) },
+                                     "multi": $0.multi] as [String: Any] }
+        // The page draws the questions; description is what history keeps and replays.
+        var payload: [String: Any] = ["type": "action", "title": "Claude", "duration": 120000.0, "questions": shown, "ask": id,
+                                      "description": questions.map { String($0.text.prefix(500)) }.joined(separator: "\n")]
         if let cwd = json["cwd"] as? String, cwd.hasPrefix("/"), cwd.count <= 1024 {
             payload["path"] = cwd
             payload["title"] = String(URL(fileURLWithPath: cwd).lastPathComponent.prefix(500))
@@ -291,15 +313,15 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler {
         present(payload)
     }
 
-    // Answer a waiting question once: 200 with the hook's output for a label, 204 to leave it to the terminal.
-    func finish(_ id: Int, label: String?) {
+    // Answer a waiting call once: 200 with the hook's output for the answers, 204 to leave it to the terminal.
+    func finish(_ id: Int, answers: [String: String]?) {
         guard let entry = pending.removeValue(forKey: id) else { return }
         entry.timer.invalidate()
         // sileo restarts a toast's full duration whenever the pointer leaves it, so the page cannot keep the deadline.
         web.callAsyncJavaScript("window.dismissAsk(a)", arguments: ["a": id], in: nil, in: .page)
-        guard let label else { return reply(entry.conn, "204 No Content") }
+        guard let answers else { return reply(entry.conn, "204 No Content") }
         var input = entry.input
-        input["answers"] = [entry.question: label]
+        input["answers"] = answers
         let output = ["hookSpecificOutput": ["hookEventName": "PreToolUse", "permissionDecision": "allow", "updatedInput": input]]
         reply(entry.conn, "200 OK", body: (try? JSONSerialization.data(withJSONObject: output)) ?? Data())
     }
@@ -322,7 +344,7 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler {
         show(payload)
         if UserDefaults.standard.bool(forKey: "sound") { NSSound(named: "Glass")?.play() }
         // A replayed question has nobody waiting for it, so history keeps it without its options.
-        history.append((Date(), payload.filter { $0.key != "options" && $0.key != "ask" }))
+        history.append((Date(), payload.filter { $0.key != "questions" && $0.key != "ask" }))
         history.removeFirst(max(0, history.count - historyLimit))
         rebuildMenu()
     }
