@@ -1,0 +1,18 @@
+#!/bin/bash
+# Show a kyvia toast: kyvia [-t success|error|warning|info|action] [-d ms] TITLE [DESCRIPTION]
+set -euo pipefail
+usage() { echo "usage: kyvia [-t success|error|warning|info|action] [-d ms] TITLE [DESCRIPTION]" >&2; exit 2; }
+type=info duration=
+while getopts t:d:h opt; do
+    case $opt in t) type=$OPTARG ;; d) duration=$OPTARG ;; *) usage ;; esac
+done
+shift $((OPTIND - 1))
+[[ $# -ge 1 && $# -le 2 ]] || usage
+[[ -z $duration || $duration =~ ^[0-9]+$ ]] || usage
+# JSON comes from JavaScript for Automation, so any text is escaped correctly without jq.
+osascript -l JavaScript -e 'function run(a) {
+    const p = {type: a[0], title: a[1], description: a[2]}
+    if (a[3]) p.duration = Number(a[3])
+    return JSON.stringify(p) }' -- "$type" "$1" "${2:-}" "$duration" |
+    curl -sf -m 2 -o /dev/null -H 'X-Kyvia: 1' --data-binary @- http://127.0.0.1:47321/notify ||
+    { echo "kyvia: the app is not running (127.0.0.1:47321)" >&2; exit 1; }

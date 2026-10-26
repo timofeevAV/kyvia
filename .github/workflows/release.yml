@@ -1,0 +1,17 @@
+# On a v* tag: build Kyvia.app and attach it to a GitHub Release as Kyvia.zip (the name install.sh downloads).
+name: release
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: write
+jobs:
+  release:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: ./build.sh --no-install
+      - run: ditto -c -k --keepParent Kyvia.app Kyvia.zip
+      - run: gh release create "$GITHUB_REF_NAME" Kyvia.zip --generate-notes
+        env:
+          GH_TOKEN: ${{ github.token }}
