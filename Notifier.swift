@@ -2,8 +2,9 @@
 // page and lets clicks through except on a toast; POST /notify on 127.0.0.1:47321 shows a toast.
 // Body: {"type": "success|error|warning|info|action", "title": "...", "description": "...", "duration": ms,
 //        "app": "bundle id to bring forward on click", "path": "the directory the toast is about"}
-// POST /ask takes a Claude Code PreToolUse hook's input for AskUserQuestion (X-Kyvia-App: the bundle id to
-// bring forward); a question the toast cannot answer gets 204 at once, so the terminal asks it instead.
+// POST /ask takes a Claude Code hook's input (X-Kyvia-App: the bundle id to bring forward): PreToolUse for
+// AskUserQuestion, or PermissionRequest; one the toast cannot answer gets 204 at once, so the terminal asks it
+// instead. PostToolUse, PostToolUseFailure and UserPromptSubmit close a permission toast answered in the terminal.
 import Cocoa
 import Network
 import WebKit
@@ -31,7 +32,8 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler {
     let historyLimit = 20
     // Questions waiting for a click, by toast; each connection gets exactly one answer.
     // shortcut: Esc in the terminal kills the hook but the toast stays until its deadline; drop the toast when the peer closes if that annoys.
-    var pending: [Int: (conn: NWConnection, input: [String: Any], questions: [Question], timer: Timer)] = [:]
+    // call is the session, tool and input of a permission request, for closing its toast.
+    var pending: [Int: (conn: NWConnection, prompt: Prompt, call: [String: Any]?, timer: Timer)] = [:]
     var askCount = 0
     var pointerInside = false
     let symbols = ["success": "checkmark.circle", "error": "xmark.circle", "warning": "exclamationmark.triangle",
@@ -144,7 +146,7 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler {
         let id = target?["ask"] as? Int ?? 0
         if message.name == "answer" {
             // Labels come from the questions themselves, so the page can only pick offered options.
-            if let picks = target?["picks"] as? [[Int]], let questions = pending[id]?.questions,
+            if let picks = target?["picks"] as? [[Int]], let questions = pending[id]?.prompt.questions,
                let answers = answers(questions, picks) { finish(id, answers: answers) }
             return
         }
@@ -219,7 +221,8 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler {
             guard let self else { return }
             var data = buffer
             if let chunk { data.append(chunk) }
-            if error != nil || data.count > 65536 { return conn.cancel() }
+            // PostToolUse carries the tool's output, a whole file for an Edit.
+            if error != nil || data.count > 16 << 20 { return conn.cancel() }
             switch self.parse(data) {
             case .incomplete where !done: self.read(conn, data)
             case .notify(let body): self.reply(conn, self.handle(body) ? "204 No Content" : "400 Bad Request")
@@ -260,9 +263,11 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler {
     }
 
     typealias Question = (text: String, labels: [String], multi: Bool)
+    // What a toast asks, and the hook's output for the answers picked.
+    typealias Prompt = (questions: [Question], output: ([String: String]) -> [String: Any])
 
     // The shape a toast can answer: 1 to 4 questions, each with 2 to 4 labelled options.
-    func askable(_ json: [String: Any]) -> (input: [String: Any], questions: [Question])? {
+    func askable(_ json: [String: Any]) -> Prompt? {
         guard json["tool_name"] as? String == "AskUserQuestion", let input = json["tool_input"] as? [String: Any],
               let raw = input["questions"] as? [[String: Any]], (1...4).contains(raw.count) else { return nil }
         let questions = raw.compactMap { q -> Question? in
@@ -273,7 +278,38 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler {
         }
         // Answers are keyed by question text, so two questions with one text could not both be answered.
         guard questions.count == raw.count, Set(questions.map(\.text)).count == questions.count else { return nil }
-        return (input, questions)
+        return (questions, { answers in
+            var input = input
+            input["answers"] = answers
+            return ["hookSpecificOutput": ["hookEventName": "PreToolUse", "permissionDecision": "allow", "updatedInput": input]]
+        })
+    }
+
+    // A permission dialog as one question, what the tool wants to run or touch, answered Allow or Deny.
+    func permission(_ json: [String: Any]) -> (prompt: Prompt, call: [String: Any])? {
+        guard let session = json["session_id"] as? String, let tool = json["tool_name"] as? String,
+              let input = json["tool_input"] as? [String: Any] else { return nil }
+        let what = (input["command"] ?? input["file_path"]) as? String ?? ""
+        // A long script would push the buttons off the panel.
+        let lines = what.split(separator: "\n", omittingEmptySubsequences: false)
+        let shown = lines.prefix(8).joined(separator: "\n") + (lines.count > 8 ? "\n…" : "")
+        let text = (tool == "Bash" ? "Wants to run" : "Wants to use \(tool)") + (what.isEmpty ? "" : "\n" + shown)
+        let prompt: Prompt = ([(text, ["Allow", "Deny"], false)], { answers in
+            let decision: [String: Any] = answers[text] == "Allow" ? ["behavior": "allow"]
+                : ["behavior": "deny", "message": "The user denied this from a kyvia toast."]
+            return ["hookSpecificOutput": ["hookEventName": "PermissionRequest", "decision": decision]]
+        })
+        return (prompt, ["session_id": session, "tool_name": tool, "tool_input": input])
+    }
+
+    // Claude Code shows its own dialog beside the toast and keeps waiting for the hook after it is answered there:
+    // the tool's PostToolUse (or PostToolUseFailure) or the session's next prompt closes the toast that is left.
+    func close(_ json: [String: Any]) {
+        let keys = json["hook_event_name"] as? String == "UserPromptSubmit" ? ["session_id"] : ["session_id", "tool_name", "tool_input"]
+        let call = json.filter { keys.contains($0.key) } as NSDictionary
+        for (id, entry) in pending where entry.call.map({ $0.filter { keys.contains($0.key) } as NSDictionary == call }) == true {
+            finish(id, answers: nil)
+        }
     }
 
     // One answer per question: exactly one pick for a single-choice question, one or more for a multi-select
@@ -294,14 +330,22 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler {
         // isValidJSONObject: -1e999 parses as -inf, which writing the answer back would crash on (an uncatchable exception).
         guard let json = try? JSONSerialization.jsonObject(with: body) as? [String: Any], JSONSerialization.isValidJSONObject(json)
         else { return reply(conn, "400 Bad Request") }
-        guard let (input, questions) = askable(json) else { return reply(conn, "204 No Content") }
+        let prompt: Prompt?, call: [String: Any]?
+        switch json["hook_event_name"] as? String {
+        case "PostToolUse", "PostToolUseFailure", "UserPromptSubmit": close(json); return reply(conn, "204 No Content")
+        case "PermissionRequest": let request = permission(json); (prompt, call) = (request?.prompt, request?.call)
+        default: (prompt, call) = (askable(json), nil)
+        }
+        guard let prompt else { return reply(conn, "204 No Content") }
+        let questions = prompt.questions
         askCount += 1
         let id = askCount
         let timer = Timer(timeInterval: 120, repeats: false) { [weak self] _ in self?.finish(id, answers: nil) }
         RunLoop.main.add(timer, forMode: .common) // the deadline keeps running while the menu-bar menu is open
-        pending[id] = (conn, input, questions, timer)
-        let shown = questions.map { ["question": String($0.text.prefix(500)), "options": $0.labels.map { String($0.prefix(500)) },
+        pending[id] = (conn, prompt, call, timer)
+        var shown = questions.map { ["question": String($0.text.prefix(500)), "options": $0.labels.map { String($0.prefix(500)) },
                                      "multi": $0.multi] as [String: Any] }
+        if call != nil { shown[0]["muted"] = 1 } // Deny in grey, so Allow reads as the answer
         // The page draws the questions; description is what history keeps and replays.
         var payload: [String: Any] = ["type": "action", "title": "Claude", "duration": 120000.0, "questions": shown, "ask": id,
                                       "description": questions.map { String($0.text.prefix(500)) }.joined(separator: "\n")]
@@ -320,10 +364,7 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler {
         // sileo restarts a toast's full duration whenever the pointer leaves it, so the page cannot keep the deadline.
         web.callAsyncJavaScript("window.dismissAsk(a)", arguments: ["a": id], in: nil, in: .page)
         guard let answers else { return reply(entry.conn, "204 No Content") }
-        var input = entry.input
-        input["answers"] = answers
-        let output = ["hookSpecificOutput": ["hookEventName": "PreToolUse", "permissionDecision": "allow", "updatedInput": input]]
-        reply(entry.conn, "200 OK", body: (try? JSONSerialization.data(withJSONObject: output)) ?? Data())
+        reply(entry.conn, "200 OK", body: (try? JSONSerialization.data(withJSONObject: entry.prompt.output(answers))) ?? Data())
     }
 
     // Keep only the known fields, as strings of bounded length.
