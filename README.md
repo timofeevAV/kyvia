@@ -57,7 +57,7 @@ Add to `~/.claude/settings.json`:
       { "hooks": [{ "type": "command", "command": "kyvia -t success \"${CLAUDE_PROJECT_DIR##*/}\" 'Done'" }] }
     ],
     "Notification": [
-      { "hooks": [{ "type": "command", "command": "kyvia -t action \"${CLAUDE_PROJECT_DIR##*/}\" 'Waiting for you'" }] }
+      { "matcher": "idle_prompt", "hooks": [{ "type": "command", "command": "kyvia -t action \"${CLAUDE_PROJECT_DIR##*/}\" 'Waiting for you'" }] }
     ],
     "PreToolUse": [
       { "matcher": "AskUserQuestion", "hooks": [{ "type": "command", "command": "kyvia ask", "timeout": 150 }] }
@@ -85,7 +85,9 @@ When Claude asks for permission to use a tool, the toast shows what it wants to 
 or the file it wants to touch) with **Allow** and **Deny**. The terminal asks at the same time, and
 whichever you answer first wins: after an answer in the terminal, the `PostToolUse`,
 `PostToolUseFailure` and `UserPromptSubmit` hooks close the toast that is left. Clicking the text
-brings the terminal forward; 120 seconds without an answer close the toast.
+brings the terminal forward; 120 seconds without an answer close the toast. The `Notification`
+hook matches only `idle_prompt`: Claude Code also notifies about the permission dialog a few
+seconds after it shows, and that toast would collapse the one with Allow and Deny.
 
 ### HTTP
 
