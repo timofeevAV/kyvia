@@ -52,10 +52,10 @@ Add to `~/.claude/settings.json`:
 {
   "hooks": {
     "Stop": [
-      { "hooks": [{ "type": "command", "command": "kyvia -t success \"${CLAUDE_PROJECT_DIR##*/}\" 'Claude is done'" }] }
+      { "hooks": [{ "type": "command", "command": "kyvia -t success \"${CLAUDE_PROJECT_DIR##*/}\" 'Done'" }] }
     ],
     "Notification": [
-      { "hooks": [{ "type": "command", "command": "kyvia -t action \"${CLAUDE_PROJECT_DIR##*/}\" 'Claude needs your input'" }] }
+      { "hooks": [{ "type": "command", "command": "kyvia -t action \"${CLAUDE_PROJECT_DIR##*/}\" 'Waiting for you'" }] }
     ]
   }
 }
