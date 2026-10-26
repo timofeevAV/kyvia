@@ -66,11 +66,13 @@ Add to `~/.claude/settings.json`:
 }
 ```
 
-With `kyvia ask`, a question Claude asks with answer options shows up as a toast: the project, the
-question and one button per option. Clicking an option answers it and the session goes on; clicking
-the text instead brings the terminal forward and the question is asked there as usual. So is a
-question nobody answers within 120 seconds, and one kyvia cannot show: several questions at once,
-multi-select, or kyvia not running. To type your own answer, click the text.
+With `kyvia ask`, the questions Claude asks with answer options show up as a toast: the project,
+then each question with a row of its options (`· any` marks one that takes several). A single
+question with one answer is answered by a click on an option; otherwise clicks pick options and
+Send answers all questions at once. Clicking the text instead brings the terminal forward and the
+questions are asked there as usual. So are questions nobody answers within 120 seconds, and ones
+kyvia cannot show (more than 4 questions, or two with the same text) or when kyvia is not running.
+To type your own answer, click the text.
 
 ### HTTP
 
@@ -92,8 +94,8 @@ kyvia never answers one. A request must also name kyvia itself in `Host` (`127.0
 
 `POST /ask` takes the input of a Claude Code `PreToolUse` hook (`kyvia ask` sends its stdin) and
 keeps the connection open while the question toast is up. The answer is `200` with the hook's
-output (`permissionDecision: allow` and the picked option in `updatedInput.answers`) when an option
-is clicked, and `204` when the question goes back to the terminal: a click on the text, 120 seconds
+output (`permissionDecision: allow` and the picked options in `updatedInput.answers`, several of
+one question joined with `, `) when the questions are answered, and `204` when the question goes back to the terminal: a click on the text, 120 seconds
 without an answer, or a body kyvia does not show as a toast. `400` and `403` mean the same as for
 `/notify`.
 
