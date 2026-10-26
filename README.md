@@ -58,10 +58,19 @@ Add to `~/.claude/settings.json`:
     ],
     "Notification": [
       { "hooks": [{ "type": "command", "command": "kyvia -t action \"${CLAUDE_PROJECT_DIR##*/}\" 'Waiting for you'" }] }
+    ],
+    "PreToolUse": [
+      { "matcher": "AskUserQuestion", "hooks": [{ "type": "command", "command": "kyvia ask", "timeout": 150 }] }
     ]
   }
 }
 ```
+
+With `kyvia ask`, a question Claude asks with answer options shows up as a toast: the project, the
+question and one button per option. Clicking an option answers it and the session goes on; clicking
+the text instead brings the terminal forward and the question is asked there as usual. So is a
+question nobody answers within 120 seconds, and one kyvia cannot show: several questions at once,
+multi-select, or kyvia not running. To type your own answer, click the text.
 
 ### HTTP
 
@@ -79,6 +88,13 @@ focuses the window whose folder holds it. The answer is `204` on success,
 `400` for a malformed body and `403` without the `X-Kyvia: 1` header. The header keeps web
 pages out: a browser cannot send a custom header cross-origin without a CORS preflight, and
 kyvia never answers one.
+
+`POST /ask` takes the input of a Claude Code `PreToolUse` hook (`kyvia ask` sends its stdin) and
+keeps the connection open while the question toast is up. The answer is `200` with the hook's
+output (`permissionDecision: allow` and the picked option in `updatedInput.answers`) when an option
+is clicked, and `204` when the question goes back to the terminal: a click on the text, 120 seconds
+without an answer, or a body kyvia does not show as a toast. `400` and `403` mean the same as for
+`/notify`.
 
 ## Uninstall
 

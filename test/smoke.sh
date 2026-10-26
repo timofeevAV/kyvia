@@ -8,6 +8,8 @@ fail() { echo "FAIL: $*" >&2; exit 1; }
 code() { curl -s -o /dev/null -w '%{http_code}' -X POST "$@" "$URL"; }
 
 curl -s -o /dev/null "$URL" && fail "port 47321 is busy, stop the running kyvia first"
+out=$(bin/kyvia ask <<<'{}') || fail "kyvia ask must exit 0 when the app is not running"
+[[ -z $out ]] || fail "kyvia ask must print nothing when the app is not running"
 "$APP/Contents/MacOS/Kyvia" & pid=$!
 disown
 tmp=$(mktemp -d)
@@ -32,6 +34,9 @@ q='{"question":"Pick?","header":"P","options":[{"label":"A","description":""},{"
     fail "a multiSelect question must get 204 at once"
 [[ $(ask -H 'X-Kyvia: 1' -d "{\"tool_name\":\"Bash\",\"tool_input\":{\"questions\":[$q}]}}") == 204 ]] ||
     fail "another tool must get 204 at once"
+out=$(bin/kyvia ask <<<"{\"tool_name\":\"AskUserQuestion\",\"tool_input\":{\"questions\":[$q,\"multiSelect\":true}]}}") ||
+    fail "kyvia ask must exit 0 on an out-of-scope question"
+[[ -z $out ]] || fail "kyvia ask must print nothing on an out-of-scope question"
 in_scope="{\"tool_name\":\"AskUserQuestion\",\"cwd\":\"/tmp/demo\",\"tool_input\":{\"questions\":[$q}]}}"
 [[ $(ask -m 1 -H 'X-Kyvia: 1' -d "$in_scope") == 000 ]] || fail "an in-scope question must wait for the toast"
 echo "smoke OK"

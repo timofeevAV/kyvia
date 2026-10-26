@@ -1,7 +1,18 @@
 #!/bin/bash
 # Show a kyvia toast: kyvia (or kv) [-t success|error|warning|info|action] [-d ms] TITLE [DESCRIPTION]
+# kyvia ask: a Claude Code PreToolUse hook that answers AskUserQuestion from a toast.
 set -euo pipefail
-usage() { echo "usage: ${0##*/} [-t success|error|warning|info|action] [-d ms] TITLE [DESCRIPTION]" >&2; exit 2; }
+usage() {
+    echo "usage: ${0##*/} [-t success|error|warning|info|action] [-d ms] TITLE [DESCRIPTION]" >&2
+    echo "       ${0##*/} ask    answer Claude Code's AskUserQuestion from a toast; reads the PreToolUse hook input" >&2
+    exit 2
+}
+# Prints the hook output for the option picked on the toast; prints nothing (the terminal asks) otherwise.
+if [[ ${1:-} == ask ]]; then
+    curl -s -m 150 -H 'X-Kyvia: 1' -H "X-Kyvia-App: ${__CFBundleIdentifier:-}" --data-binary @- \
+        http://127.0.0.1:47321/ask || true
+    exit 0
+fi
 type=info duration=
 while getopts t:d:h opt; do
     case $opt in t) type=$OPTARG ;; d) duration=$OPTARG ;; *) usage ;; esac
