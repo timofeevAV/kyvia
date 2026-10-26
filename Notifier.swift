@@ -2,6 +2,8 @@
 // page and lets clicks through except on a toast; POST /notify on 127.0.0.1:47321 shows a toast.
 // Body: {"type": "success|error|warning|info|action", "title": "...", "description": "...", "duration": ms,
 //        "app": "bundle id to bring forward on click", "path": "the directory the toast is about"}
+// POST /ask takes a Claude Code PreToolUse hook's input for AskUserQuestion (X-Kyvia-App: the bundle id to
+// bring forward); a question the toast cannot answer gets 204 at once, so the terminal asks it instead.
 import Cocoa
 import Network
 import WebKit
@@ -170,26 +172,55 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler {
             if error != nil || data.count > 65536 { return conn.cancel() }
             switch self.parse(data) {
             case .incomplete where !done: self.read(conn, data)
-            case .request(let body): self.reply(conn, self.handle(body) ? "204 No Content" : "400 Bad Request")
+            case .notify(let body): self.reply(conn, self.handle(body) ? "204 No Content" : "400 Bad Request")
+            case .ask(let body, let app): self.ask(conn, body, app: app)
             case .forbidden: self.reply(conn, "403 Forbidden")
             default: self.reply(conn, "400 Bad Request")
             }
         }
     }
 
-    enum Parsed { case incomplete, request(Data), forbidden, bad }
+    enum Parsed { case incomplete, notify(Data), ask(Data, app: String?), forbidden, bad }
 
     func parse(_ data: Data) -> Parsed {
         guard let end = data.range(of: Data("\r\n\r\n".utf8)) else { return .incomplete }
-        let head = String(decoding: data[..<end.lowerBound], as: UTF8.self).lowercased()
-        let lines = head.components(separatedBy: "\r\n")
-        guard lines.first?.hasPrefix("post /notify ") == true else { return .bad }
+        let raw = String(decoding: data[..<end.lowerBound], as: UTF8.self).components(separatedBy: "\r\n")
+        let lines = raw.map { $0.lowercased() }
+        let isAsk = lines.first?.hasPrefix("post /ask ") == true
+        guard isAsk || lines.first?.hasPrefix("post /notify ") == true else { return .bad }
         // A custom header cannot be sent cross-origin without a CORS preflight, which this
         // server never answers, so web pages in a browser cannot raise toasts.
         guard lines.contains("x-kyvia: 1") else { return .forbidden }
         let length = lines.lazy.compactMap { $0.hasPrefix("content-length:") ? Int($0.dropFirst(15).trimmingCharacters(in: .whitespaces)) : nil }.first ?? 0
         let body = data[end.upperBound...]
-        return body.count < length ? .incomplete : .request(Data(body.prefix(length)))
+        guard body.count >= length else { return .incomplete }
+        let content = Data(body.prefix(length))
+        guard isAsk else { return .notify(content) }
+        // Header names ignore case, a bundle id does not: read the value from the raw line.
+        let app = raw.first { $0.lowercased().hasPrefix("x-kyvia-app:") }?.dropFirst(12).trimmingCharacters(in: .whitespaces)
+        return .ask(content, app: bundleID(app))
+    }
+
+    func bundleID(_ value: String?) -> String? {
+        guard let value, value.count <= 255, value.range(of: "^[A-Za-z0-9.-]+$", options: .regularExpression) != nil else { return nil }
+        return value
+    }
+
+    // The one shape a toast can answer: a single single-choice question with 2 to 4 labelled options.
+    func askable(_ json: [String: Any]) -> (input: [String: Any], question: String, labels: [String])? {
+        guard json["tool_name"] as? String == "AskUserQuestion", let input = json["tool_input"] as? [String: Any],
+              let questions = input["questions"] as? [[String: Any]], questions.count == 1,
+              let question = questions[0]["question"] as? String, !question.isEmpty,
+              questions[0]["multiSelect"] as? Bool != true,
+              let options = questions[0]["options"] as? [[String: Any]], (2...4).contains(options.count) else { return nil }
+        let labels = options.compactMap { $0["label"] as? String }.filter { !$0.isEmpty }
+        return labels.count == options.count ? (input, question, labels) : nil
+    }
+
+    func ask(_ conn: NWConnection, _ body: Data, app: String?) {
+        guard let json = try? JSONSerialization.jsonObject(with: body) as? [String: Any] else { return reply(conn, "400 Bad Request") }
+        guard askable(json) != nil else { return reply(conn, "204 No Content") }
+        reply(conn, "204 No Content")
     }
 
     // Keep only the known fields, as strings of bounded length.
@@ -200,8 +231,7 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler {
             if let value = json[key] as? String { payload[key] = String(value.prefix(500)) }
         }
         if let duration = json["duration"] as? Double, duration > 0 { payload["duration"] = min(duration, 600000) }
-        if let app = json["app"] as? String, app.count <= 255,
-           app.range(of: "^[A-Za-z0-9.-]+$", options: .regularExpression) != nil { payload["app"] = app }
+        if let app = bundleID(json["app"] as? String) { payload["app"] = app }
         if let path = json["path"] as? String, path.hasPrefix("/"), path.count <= 1024 { payload["path"] = path }
         show(payload)
         if UserDefaults.standard.bool(forKey: "sound") { NSSound(named: "Glass")?.play() }

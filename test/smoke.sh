@@ -22,4 +22,14 @@ rc=0; bin/kyvia 2>/dev/null || rc=$?
 [[ $rc == 2 ]] || fail "the CLI without a title must exit 2, got $rc"
 ln -s "$PWD/bin/kyvia" "$tmp/kv"
 [[ $("$tmp/kv" 2>&1) == "usage: kv "* ]] || fail "the kv link must name itself in usage"
+
+ASK=http://127.0.0.1:47321/ask
+ask() { curl -s -o /dev/null -w '%{http_code}' -m 2 -X POST "$@" "$ASK"; }
+q='{"question":"Pick?","header":"P","options":[{"label":"A","description":""},{"label":"B","description":""}]'
+[[ $(ask -d '{}') == 403 ]] || fail "/ask without X-Kyvia must get 403"
+[[ $(ask -H 'X-Kyvia: 1' -d 'not json') == 400 ]] || fail "/ask with a bad body must get 400"
+[[ $(ask -H 'X-Kyvia: 1' -d "{\"tool_name\":\"AskUserQuestion\",\"tool_input\":{\"questions\":[$q,\"multiSelect\":true}]}}") == 204 ]] ||
+    fail "a multiSelect question must get 204 at once"
+[[ $(ask -H 'X-Kyvia: 1' -d "{\"tool_name\":\"Bash\",\"tool_input\":{\"questions\":[$q}]}}") == 204 ]] ||
+    fail "another tool must get 204 at once"
 echo "smoke OK"
