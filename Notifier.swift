@@ -19,6 +19,11 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler {
     // shortcut: history lives in memory only, so a restart of the app empties the menu.
     var history: [(date: Date, payload: [String: Any])] = []
     let historyLimit = 20
+    // Questions waiting for a click, by toast; each connection gets exactly one answer.
+    // shortcut: Esc in the terminal kills the hook but the toast stays until its deadline; drop the toast when the peer closes if that annoys.
+    var pending: [Int: (conn: NWConnection, input: [String: Any], question: String, labels: [String], timer: Timer)] = [:]
+    var askCount = 0
+    var overToast = false
     let symbols = ["success": "checkmark.circle", "error": "xmark.circle", "warning": "exclamationmark.triangle",
                    "info": "info.circle", "action": "arrow.right.circle"]
 
@@ -39,6 +44,7 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler {
 
         let config = WKWebViewConfiguration()
         config.userContentController.add(self, name: "focus")
+        config.userContentController.add(self, name: "answer")
         web = WKWebView(frame: NSRect(origin: .zero, size: size), configuration: config)
         web.setValue(false, forKey: "drawsBackground")
         panel.contentView = web
@@ -87,19 +93,34 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler {
         else { show(payload) }
     }
 
+    // The page learns where the pointer is (WebKit sends no hover to a window that is never key) and says
+    // whether it is over a toast; outside the panel it is told once more, so the toast can collapse.
     func trackMouse() {
         let point = NSEvent.mouseLocation, frame = panel.frame
-        guard frame.contains(point) else { panel.ignoresMouseEvents = true; return }
-        web.callAsyncJavaScript("return !!document.elementFromPoint(x, y)?.closest('[data-sileo-toast]')",
-                                arguments: ["x": point.x - frame.minX, "y": frame.maxY - point.y], in: nil, in: .page) { [weak self] in
-            self?.panel.ignoresMouseEvents = (try? $0.get()) as? Bool != true
+        let inside = frame.contains(point)
+        guard inside || overToast else { panel.ignoresMouseEvents = true; return }
+        let at = inside ? ["x": point.x - frame.minX, "y": frame.maxY - point.y] : ["x": -1.0, "y": -1.0]
+        web.callAsyncJavaScript("return window.hover(x, y)", arguments: at, in: nil, in: .page) { [weak self] in
+            let over = (try? $0.get()) as? Bool == true
+            self?.overToast = over
+            self?.panel.ignoresMouseEvents = !over
         }
     }
 
-    // A click on a toast: the page sends back the toast's app and path.
+    // A click on a toast: an option answers its question; anywhere else the page sends back the toast's app
+    // and path, and a question is left to the terminal.
     func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
         let target = message.body as? [String: Any]
+        let id = target?["ask"] as? Int ?? 0
+        if message.name == "answer" {
+            // The label comes from the question itself, so the page can only pick an offered option.
+            if let option = target?["option"] as? Int, let labels = pending[id]?.labels, labels.indices.contains(option) {
+                finish(id, label: labels[option])
+            }
+            return
+        }
         focus(app: target?["app"] as? String, path: target?["path"] as? String)
+        finish(id, label: nil)
     }
 
     // Bring a running app forward, never launch one. VS Code gets the window whose folder holds the path:
@@ -219,8 +240,30 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler {
 
     func ask(_ conn: NWConnection, _ body: Data, app: String?) {
         guard let json = try? JSONSerialization.jsonObject(with: body) as? [String: Any] else { return reply(conn, "400 Bad Request") }
-        guard askable(json) != nil else { return reply(conn, "204 No Content") }
-        reply(conn, "204 No Content")
+        guard let (input, question, labels) = askable(json) else { return reply(conn, "204 No Content") }
+        askCount += 1
+        let id = askCount
+        let timer = Timer.scheduledTimer(withTimeInterval: 120, repeats: false) { [weak self] _ in self?.finish(id, label: nil) }
+        pending[id] = (conn, input, question, labels, timer)
+        var payload: [String: Any] = ["type": "action", "title": "Claude", "description": String(question.prefix(500)),
+                                      "duration": 120000.0, "options": labels.map { String($0.prefix(500)) }, "ask": id]
+        if let cwd = json["cwd"] as? String, cwd.hasPrefix("/"), cwd.count <= 1024 {
+            payload["path"] = cwd
+            payload["title"] = String(URL(fileURLWithPath: cwd).lastPathComponent.prefix(500))
+        }
+        if let app { payload["app"] = app }
+        present(payload)
+    }
+
+    // Answer a waiting question once: 200 with the hook's output for a label, 204 to leave it to the terminal.
+    func finish(_ id: Int, label: String?) {
+        guard let entry = pending.removeValue(forKey: id) else { return }
+        entry.timer.invalidate()
+        guard let label else { return reply(entry.conn, "204 No Content") }
+        var input = entry.input
+        input["answers"] = [entry.question: label]
+        let output = ["hookSpecificOutput": ["hookEventName": "PreToolUse", "permissionDecision": "allow", "updatedInput": input]]
+        reply(entry.conn, "200 OK", body: (try? JSONSerialization.data(withJSONObject: output)) ?? Data())
     }
 
     // Keep only the known fields, as strings of bounded length.
@@ -233,17 +276,23 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler {
         if let duration = json["duration"] as? Double, duration > 0 { payload["duration"] = min(duration, 600000) }
         if let app = bundleID(json["app"] as? String) { payload["app"] = app }
         if let path = json["path"] as? String, path.hasPrefix("/"), path.count <= 1024 { payload["path"] = path }
-        show(payload)
-        if UserDefaults.standard.bool(forKey: "sound") { NSSound(named: "Glass")?.play() }
-        history.append((Date(), payload))
-        history.removeFirst(max(0, history.count - historyLimit))
-        rebuildMenu()
+        present(payload)
         return true
     }
 
-    func reply(_ conn: NWConnection, _ status: String) {
-        let response = "HTTP/1.1 \(status)\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
-        conn.send(content: Data(response.utf8), completion: .contentProcessed { _ in conn.cancel() })
+    func present(_ payload: [String: Any]) {
+        show(payload)
+        if UserDefaults.standard.bool(forKey: "sound") { NSSound(named: "Glass")?.play() }
+        // A replayed question has nobody waiting for it, so history keeps it without its options.
+        history.append((Date(), payload.filter { $0.key != "options" && $0.key != "ask" }))
+        history.removeFirst(max(0, history.count - historyLimit))
+        rebuildMenu()
+    }
+
+    func reply(_ conn: NWConnection, _ status: String, body: Data = Data()) {
+        let type = body.isEmpty ? "" : "Content-Type: application/json\r\n"
+        let head = "HTTP/1.1 \(status)\r\n\(type)Content-Length: \(body.count)\r\nConnection: close\r\n\r\n"
+        conn.send(content: Data(head.utf8) + body, completion: .contentProcessed { _ in conn.cancel() })
     }
 }
 

@@ -32,4 +32,6 @@ q='{"question":"Pick?","header":"P","options":[{"label":"A","description":""},{"
     fail "a multiSelect question must get 204 at once"
 [[ $(ask -H 'X-Kyvia: 1' -d "{\"tool_name\":\"Bash\",\"tool_input\":{\"questions\":[$q}]}}") == 204 ]] ||
     fail "another tool must get 204 at once"
+in_scope="{\"tool_name\":\"AskUserQuestion\",\"cwd\":\"/tmp/demo\",\"tool_input\":{\"questions\":[$q}]}}"
+[[ $(ask -m 1 -H 'X-Kyvia: 1' -d "$in_scope") == 000 ]] || fail "an in-scope question must wait for the toast"
 echo "smoke OK"
