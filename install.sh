@@ -46,6 +46,8 @@ cat > "$AGENT" <<EOF
 </dict></plist>
 EOF
 launchctl bootstrap "$DOMAIN" "$AGENT"
+# The first launch of a downloaded build takes a few seconds; wait so "try it" below works at once.
+for _ in {1..100}; do curl -s -o /dev/null http://127.0.0.1:47321/ && break; sleep 0.1; done
 
 echo "kyvia installed: $APP, starts at login"
 case ":$PATH:" in
