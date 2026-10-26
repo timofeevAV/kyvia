@@ -85,6 +85,7 @@ Needs the Xcode command line tools and Node.js.
 ```sh
 ./build.sh               # build Kyvia.app and install it like install.sh does
 ./build.sh --no-install  # build only
+test/smoke.sh            # start the built app and check the HTTP API and the CLI (port 47321 must be free)
 ```
 
 The app is ad-hoc signed, not notarized. `curl` does not mark downloads as quarantined, so

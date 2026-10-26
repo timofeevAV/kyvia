@@ -1,0 +1,15 @@
+# Lint the scripts, build the app and smoke test it on every pull request and on main.
+name: ci
+on:
+  pull_request:
+  push:
+    branches: [main]
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+      - run: brew install shellcheck
+      - run: shellcheck build.sh install.sh uninstall.sh bin/kyvia test/smoke.sh
+      - run: ./build.sh --no-install
+      - run: test/smoke.sh
